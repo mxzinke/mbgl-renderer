@@ -100,7 +100,7 @@ const normalizeMapboxTileURL = (url, token) => {
 
 /**
  * Normalize a Mapbox style URL to a full URL
- * @param {string} url - url to mapbox source in style json, e.g. "url": "mapbox://styles/mapbox/streets-v9"
+ * @param {string} url - url to mapbox source in style json, e.g. "url": "mapbox://styles/mapbox/streets-v12"
  * @param {string} token - mapbox public token
  */
 export const normalizeMapboxStyleURL = (url, token) => {
@@ -110,9 +110,11 @@ export const normalizeMapboxStyleURL = (url, token) => {
             access_token: token,
             secure: true,
         }
-        urlObject.pathname = `styles/v1${urlObject.path}`
+        urlObject.pathname = `styles/v1/${url.split('mapbox://styles/')[1]}`
         urlObject.protocol = 'https'
         urlObject.host = 'api.mapbox.com'
+        urlObject.query.secure = true
+        urlObject.query.access_token = token
         return urlLib.format(urlObject)
     } catch (e) {
         const msg = `Could not normalize Mapbox style URL: ${url}\n${e}`
@@ -381,6 +383,61 @@ const getRemoteAssetPromise = (url) => {
 }
 
 /**
+ * Fetch a remotely hosted json file
+ * Anything other than a HTTP 200 response results in an exception.
+ * 
+ * @param {String} url - URL of the asset
+ * returns a Promise
+ */
+const getRemoteJSON = (url) => {
+    return new Promise((resolve, reject) => {
+        webRequest(
+            {
+                url
+            },
+            (err, res, data) => {
+                if (err) {
+                    return callback(err)
+                }
+    
+                switch (res.statusCode) {
+                    case 200: {
+                        return resolve(data)
+                    }
+                    default: {
+                        const msg = `request for remote asset failed: ${res.request.uri.href} (status: ${res.statusCode})`
+                        logger.error(msg)
+                        return reject(new Error(msg))
+                    }
+                }
+            }
+        )
+    })
+}
+
+/**
+ * Get Remote Style Import (e.g. from Mapbox)
+ * 
+ * @param {String} url - URL of the asset
+ * @param {String} token - Mapbox access token (optional)
+ */
+const getRemoteStyleImport = async (url, token) => {
+    const importStyleUrl = isMapboxStyleURL(url) ? normalizeMapboxStyleURL(url, token) : url
+    if (!importStyleUrl) throw new Error("Invalid import style URL")
+
+    try {
+        const importedStyle = JSON.parse((await getRemoteJSON(importStyleUrl)))
+        if (!importedStyle) throw new Error(`Could not fetch import style: ${importStyleUrl}`)
+        if (typeof importedStyle !== 'object' || importedStyle.version !== 8) throw new Error(`Invalid import style: ${importedStyle} (Version Required: 8)`)
+        
+        return importedStyle
+    } catch(e) {
+        logger.error(e.message)
+        throw new Error(`Could not fetch import style from ${importStyleUrl} - ${e.toString()}`)
+    }
+}
+
+/**
  * requestHandler constructs a request handler for the map to load resources.
  *
  * @param {String} - path to tilesets (optional)
@@ -614,6 +671,7 @@ export const render = async (style, width = 1024, height = 1024, options) => {
         ratio = 1,
         padding = 0,
         images = null,
+        imports = null,
     } = options
     let { center = null, zoom = null, tilePath = null } = options
 
@@ -703,7 +761,47 @@ export const render = async (style, width = 1024, height = 1024, options) => {
         tilePath = path.normalize(tilePath)
     }
 
-    const localMbtilesMatches = JSON.stringify(style).match(MBTILES_REGEXP)
+    const correctedStyle = style
+    if (imports !== null && imports.length > 0) {
+        const importedStyles = await Promise.all(imports.map(async (e) => ({
+            id: e.id,
+            url: e.url,
+            style: await getRemoteStyleImport(e.url, token),
+        })))
+
+        importedStyles.forEach(({ id, style: importedStyle }, idx) => {
+            const importId = id || idx.toString()
+
+            // Add sources from imported styles
+            Object.keys(importedStyle.sources).forEach((key) => {
+                correctedStyle.sources[key === "composite" ? importId : `${importId}-${key}`] = importedStyle.sources[key]
+            })
+
+            // Add layers from imported styles (before layers from local styles)
+            const importedLayers = importedStyle.layers.map((layer) => ({
+                ...layer,
+                source: !layer.source ? undefined : layer.source === "composite" ? importId : `${importId}-${layer.source}`
+            }))
+            correctedStyle.layers = [...importedLayers, ...correctedStyle.layers]
+
+            // Add fog, if it is not yet set by the local styles
+            if (typeof importedStyle.fog === "object" && !correctedStyle.fog) {
+                correctedStyle.fog = importedStyle.fog
+            }
+
+            // Glyphs
+            if (typeof importedStyle.glyphs === "string" && !correctedStyle.glyphs) {
+                correctedStyle.glyphs = importedStyle.glyphs
+            }
+
+            // Sprite
+            if (typeof importedStyle.sprite === "string" && !correctedStyle.sprite) {
+                correctedStyle.sprite = importedStyle.sprite
+            }
+        })
+    }
+
+    const localMbtilesMatches = JSON.stringify(correctedStyle).match(MBTILES_REGEXP)
     if (localMbtilesMatches && !tilePath) {
         const msg =
             'Style has local mbtiles file sources, but no tilePath is set'
@@ -734,7 +832,7 @@ export const render = async (style, width = 1024, height = 1024, options) => {
         ratio,
     })
 
-    map.load(style)
+    map.load(correctedStyle)
 
     await loadImages(map, images)
 

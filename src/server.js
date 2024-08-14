@@ -22,6 +22,7 @@ const PARAMS = {
     pitch: { isRequired: false, isDecimal: true },
     token: { isRequired: false, isString: true },
     images: { isRequired: false, isObject: true },
+    imports: { isRequired: false, isArray: true },
 }
 
 const renderImage = (params, response, next, tilePath, logger) => {
@@ -32,6 +33,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
         padding = 0,
         bearing = null,
         pitch = null,
+        imports = null,
     } = params
     let {
         style,
@@ -229,6 +231,39 @@ const renderImage = (params, response, next, tilePath, logger) => {
         }
     }
 
+    if (imports !== null) {
+        if (typeof imports !== 'object' && !Array.isArray(imports)) {
+            return next(
+                new restifyErrors.BadRequestError(
+                    'imports must be an array'
+                )
+            )
+        }
+
+        for (const imp of imports) {
+            if (!(imp && imp.url && imp.id)) {
+                return next(
+                    new restifyErrors.BadRequestError(
+                        'Invalid import object; a url and a id is required for each import'
+                    )
+                )
+            }
+            if (!imp.url.startsWith("mapbox://styles"))
+                try {
+                    // use new URL to validate URL
+                    
+                    /* eslint-disable-next-line no-unused-vars */
+                    const url = new URL(imp.url)
+                } catch (e) {
+                    return next(
+                        new restifyErrors.BadRequestError(
+                            `Invalid import URL: ${imp.url}`
+                        )
+                    )
+                }
+        }
+    }
+
     try {
         render(style, parseInt(width, 10), parseInt(height, 10), {
             zoom,
@@ -241,6 +276,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
             pitch,
             token,
             images,
+            imports
         })
             .then((data, rejected) => {
                 if (rejected) {
