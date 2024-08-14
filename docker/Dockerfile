@@ -44,8 +44,7 @@ RUN ARCH= && dpkgArch="$(dpkg --print-architecture)" \
   && node --version \
   && npm --version
 
-COPY package*.json /app/
-
+# Install bin dependencies
 RUN dpkgArch="$(dpkg --print-architecture)" && \
   DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y install \
   curl \
@@ -69,10 +68,6 @@ RUN dpkgArch="$(dpkg --print-architecture)" && \
   fi && \
   apt install ./libicu66_66.1-2ubuntu2.1_$dpkgArch.deb && \
   rm -rf *.deb && \
-  mkdir src && \
-  npm ci --only=production && \
-  rm -rf "/root/.npm" && \
-  rm -rf "/root/.cache" && \
   # remove packages known not to be needed and cleanup apt cache
   apt-get autoremove -y && \
   apt-get remove -y libc6-dev && \
@@ -81,11 +76,24 @@ RUN dpkgArch="$(dpkg --print-architecture)" && \
   # if this is not defined via a bind point to host
   mkdir /app/tiles
 
+
+COPY package*.json /app/
+#RUN npm ci
+
+COPY .babelrc /app/.babelrc
+COPY src/ /app/src/
+
+# Install packages and compile code
+RUN npm ci && \
+  npm run build && \
+  npm prune --include prod && \
+  rm -rf "/root/.npm" && \
+  rm -rf "/root/.cache" && \
+  rm -rf "/app/src" && \
+  rm -rf "/app/.babelrc"
+
 EXPOSE 80
 ENV DISPLAY=:99
-
-# Copy just the compiled code into the container
-COPY ./dist/* /app/dist/
 
 COPY ./docker/entrypoint.sh /root
 RUN chmod +x /root/entrypoint.sh
