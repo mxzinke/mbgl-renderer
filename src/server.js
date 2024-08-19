@@ -99,7 +99,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
         }
     }
     if (ratio !== null) {
-        ratio = parseInt(ratio, 10)
+        //ratio = parseInt(ratio, 10)
         if (!ratio || ratio < 1) {
             return next(
                 new restifyErrors.BadRequestError(
@@ -234,9 +234,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
     if (imports !== null) {
         if (typeof imports !== 'object' && !Array.isArray(imports)) {
             return next(
-                new restifyErrors.BadRequestError(
-                    'imports must be an array'
-                )
+                new restifyErrors.BadRequestError('imports must be an array')
             )
         }
 
@@ -248,10 +246,10 @@ const renderImage = (params, response, next, tilePath, logger) => {
                     )
                 )
             }
-            if (!imp.url.startsWith("mapbox://styles"))
+            if (!imp.url.startsWith('mapbox://styles'))
                 try {
                     // use new URL to validate URL
-                    
+
                     /* eslint-disable-next-line no-unused-vars */
                     const url = new URL(imp.url)
                 } catch (e) {
@@ -276,7 +274,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
             pitch,
             token,
             images,
-            imports
+            imports,
         })
             .then((data, rejected) => {
                 if (rejected) {

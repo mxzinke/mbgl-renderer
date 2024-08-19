@@ -385,7 +385,7 @@ const getRemoteAssetPromise = (url) => {
 /**
  * Fetch a remotely hosted json file
  * Anything other than a HTTP 200 response results in an exception.
- * 
+ *
  * @param {String} url - URL of the asset
  * returns a Promise
  */
@@ -393,13 +393,13 @@ const getRemoteJSON = (url) => {
     return new Promise((resolve, reject) => {
         webRequest(
             {
-                url
+                url,
             },
             (err, res, data) => {
                 if (err) {
                     return callback(err)
                 }
-    
+
                 switch (res.statusCode) {
                     case 200: {
                         return resolve(data)
@@ -417,23 +417,31 @@ const getRemoteJSON = (url) => {
 
 /**
  * Get Remote Style Import (e.g. from Mapbox)
- * 
+ *
  * @param {String} url - URL of the asset
  * @param {String} token - Mapbox access token (optional)
  */
 const getRemoteStyleImport = async (url, token) => {
-    const importStyleUrl = isMapboxStyleURL(url) ? normalizeMapboxStyleURL(url, token) : url
-    if (!importStyleUrl) throw new Error("Invalid import style URL")
+    const importStyleUrl = isMapboxStyleURL(url)
+        ? normalizeMapboxStyleURL(url, token)
+        : url
+    if (!importStyleUrl) throw new Error('Invalid import style URL')
 
     try {
-        const importedStyle = JSON.parse((await getRemoteJSON(importStyleUrl)))
-        if (!importedStyle) throw new Error(`Could not fetch import style: ${importStyleUrl}`)
-        if (typeof importedStyle !== 'object' || importedStyle.version !== 8) throw new Error(`Invalid import style: ${importedStyle} (Version Required: 8)`)
-        
+        const importedStyle = JSON.parse(await getRemoteJSON(importStyleUrl))
+        if (!importedStyle)
+            throw new Error(`Could not fetch import style: ${importStyleUrl}`)
+        if (typeof importedStyle !== 'object' || importedStyle.version !== 8)
+            throw new Error(
+                `Invalid import style: ${importedStyle} (Version Required: 8)`
+            )
+
         return importedStyle
-    } catch(e) {
+    } catch (e) {
         logger.error(e.message)
-        throw new Error(`Could not fetch import style from ${importStyleUrl} - ${e.toString()}`)
+        throw new Error(
+            `Could not fetch import style from ${importStyleUrl} - ${e.toString()}`
+        )
     }
 }
 
@@ -638,8 +646,8 @@ const toPNG = async (buffer, width, height, ratio) => {
 
     return sharp(buffer, {
         raw: {
-            width: width * ratio,
-            height: height * ratio,
+            width: Math.round(width * ratio),
+            height: Math.round(height * ratio),
             channels: 4,
         },
     })
@@ -763,45 +771,63 @@ export const render = async (style, width = 1024, height = 1024, options) => {
 
     const correctedStyle = style
     if (imports !== null && imports.length > 0) {
-        const importedStyles = await Promise.all(imports.map(async (e) => ({
-            id: e.id,
-            url: e.url,
-            style: await getRemoteStyleImport(e.url, token),
-        })))
+        const importedStyles = await Promise.all(
+            imports.map(async (e) => ({
+                id: e.id,
+                url: e.url,
+                style: await getRemoteStyleImport(e.url, token),
+            }))
+        )
 
         importedStyles.forEach(({ id, style: importedStyle }, idx) => {
             const importId = id || idx.toString()
 
             // Add sources from imported styles
             Object.keys(importedStyle.sources).forEach((key) => {
-                correctedStyle.sources[key === "composite" ? importId : `${importId}-${key}`] = importedStyle.sources[key]
+                correctedStyle.sources[
+                    key === 'composite' ? importId : `${importId}-${key}`
+                ] = importedStyle.sources[key]
             })
 
             // Add layers from imported styles (before layers from local styles)
             const importedLayers = importedStyle.layers.map((layer) => ({
                 ...layer,
-                source: !layer.source ? undefined : layer.source === "composite" ? importId : `${importId}-${layer.source}`
+                source: !layer.source
+                    ? undefined
+                    : layer.source === 'composite'
+                    ? importId
+                    : `${importId}-${layer.source}`,
             }))
-            correctedStyle.layers = [...importedLayers, ...correctedStyle.layers]
+            correctedStyle.layers = [
+                ...importedLayers,
+                ...correctedStyle.layers,
+            ]
 
             // Add fog, if it is not yet set by the local styles
-            if (typeof importedStyle.fog === "object" && !correctedStyle.fog) {
+            if (typeof importedStyle.fog === 'object' && !correctedStyle.fog) {
                 correctedStyle.fog = importedStyle.fog
             }
 
             // Glyphs
-            if (typeof importedStyle.glyphs === "string" && !correctedStyle.glyphs) {
+            if (
+                typeof importedStyle.glyphs === 'string' &&
+                !correctedStyle.glyphs
+            ) {
                 correctedStyle.glyphs = importedStyle.glyphs
             }
 
             // Sprite
-            if (typeof importedStyle.sprite === "string" && !correctedStyle.sprite) {
+            if (
+                typeof importedStyle.sprite === 'string' &&
+                !correctedStyle.sprite
+            ) {
                 correctedStyle.sprite = importedStyle.sprite
             }
         })
     }
 
-    const localMbtilesMatches = JSON.stringify(correctedStyle).match(MBTILES_REGEXP)
+    const localMbtilesMatches =
+        JSON.stringify(correctedStyle).match(MBTILES_REGEXP)
     if (localMbtilesMatches && !tilePath) {
         const msg =
             'Style has local mbtiles file sources, but no tilePath is set'
