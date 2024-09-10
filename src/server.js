@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 import fs from 'fs'
-import restify from 'restify'
-import restifyValidation from 'node-restify-validation'
-import restifyErrors from 'restify-errors'
+import express from 'express'
+import { body, query, validationResult } from 'express-validator'
 import { program, InvalidOptionArgumentError } from 'commander'
-import pino from 'restify-pino-logger'
+import pino from 'pino-http'
 
 import { version } from '../package.json'
 import { render } from './render'
@@ -12,17 +11,17 @@ import { render } from './render'
 const parseListToFloat = (text) => text.split(',').map(Number)
 
 const PARAMS = {
-    style: { isRequired: true, isString: true },
-    width: { isRequired: true, isInt: true },
-    height: { isRequired: true, isInt: true },
-    padding: { isRequired: false, isInt: true },
-    zoom: { isRequired: false, isDecimal: true },
-    ratio: { isRequired: false, isDecimal: true },
-    bearing: { isRequired: false, isDecimal: true },
-    pitch: { isRequired: false, isDecimal: true },
-    token: { isRequired: false, isString: true },
-    images: { isRequired: false, isObject: true },
-    imports: { isRequired: false, isArray: true },
+    style: { in: ['body', 'query'], isObject: true },
+    width: { in: ['body', 'query'], isInt: true },
+    height: { in: ['body', 'query'], isInt: true },
+    padding: { in: ['body', 'query'], isInt: true, optional: true },
+    zoom: { in: ['body', 'query'], isFloat: true, optional: true },
+    ratio: { in: ['body', 'query'], isFloat: true, optional: true },
+    bearing: { in: ['body', 'query'], isFloat: true, optional: true },
+    pitch: { in: ['body', 'query'], isFloat: true, optional: true },
+    token: { in: ['body', 'query'], isString: true, optional: true },
+    images: { in: ['body', 'query'], isObject: true, optional: true },
+    imports: { in: ['body', 'query'], isArray: true, optional: true },
 }
 
 const renderImage = (params, response, next, tilePath, logger) => {
@@ -48,12 +47,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
         try {
             style = JSON.parse(style)
         } catch (jsonErr) {
-            return next(
-                new restifyErrors.BadRequestError(
-                    { cause: jsonErr },
-                    'Error parsing JSON style'
-                )
-            )
+            return next(new Error('Error parsing JSON style'))
         }
     }
 
@@ -64,8 +58,8 @@ const renderImage = (params, response, next, tilePath, logger) => {
 
         if (center.length !== 2) {
             return next(
-                new restifyErrors.BadRequestError(
-                    `Center must be longitude,latitude.  Invalid value found: ${[
+                new Error(
+                    `Center must be longitude,latitude. Invalid value found: ${[
                         ...center,
                     ]}`
                 )
@@ -74,7 +68,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
 
         if (!Number.isFinite(center[0]) || Math.abs(center[0]) > 180) {
             return next(
-                new restifyErrors.BadRequestError(
+                new Error(
                     `Center longitude is outside world bounds (-180 to 180 deg): ${center[0]}`
                 )
             )
@@ -82,7 +76,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
 
         if (!Number.isFinite(center[1]) || Math.abs(center[1]) > 90) {
             return next(
-                new restifyErrors.BadRequestError(
+                new Error(
                     `Center latitude is outside world bounds (-90 to 90 deg): ${center[1]}`
                 )
             )
@@ -92,19 +86,16 @@ const renderImage = (params, response, next, tilePath, logger) => {
         zoom = parseFloat(zoom)
         if (zoom < 0 || zoom > 22) {
             return next(
-                new restifyErrors.BadRequestError(
+                new Error(
                     `Zoom level is outside supported range (0-22): ${zoom}`
                 )
             )
         }
     }
     if (ratio !== null) {
-        //ratio = parseInt(ratio, 10)
         if (!ratio || ratio < 1) {
             return next(
-                new restifyErrors.BadRequestError(
-                    `Ratio is outside supported range (>=1): ${ratio}`
-                )
+                new Error(`Ratio is outside supported range (>=1): ${ratio}`)
             )
         }
     }
@@ -115,8 +106,8 @@ const renderImage = (params, response, next, tilePath, logger) => {
 
         if (bounds.length !== 4) {
             return next(
-                new restifyErrors.BadRequestError(
-                    `Bounds must be west,south,east,north.  Invalid value found: ${[
+                new Error(
+                    `Bounds must be west,south,east,north. Invalid value found: ${[
                         ...bounds,
                     ]}`
                 )
@@ -125,8 +116,8 @@ const renderImage = (params, response, next, tilePath, logger) => {
         for (const b of bounds) {
             if (!Number.isFinite(b)) {
                 return next(
-                    new restifyErrors.BadRequestError(
-                        `Bounds must be west,south,east,north.  Invalid value found: ${[
+                    new Error(
+                        `Bounds must be west,south,east,north. Invalid value found: ${[
                             ...bounds,
                         ]}`
                     )
@@ -137,34 +128,23 @@ const renderImage = (params, response, next, tilePath, logger) => {
         const [west, south, east, north] = bounds
         if (west === east) {
             return next(
-                new restifyErrors.BadRequestError(
-                    `Bounds west and east coordinate are the same value`
-                )
+                new Error(`Bounds west and east coordinate are the same value`)
             )
         }
         if (south === north) {
             return next(
-                new restifyErrors.BadRequestError(
+                new Error(
                     `Bounds south and north coordinate are the same value`
                 )
             )
         }
 
         if (padding) {
-            // padding must not be greater than width / 2 and height / 2
             if (Math.abs(padding) >= width / 2) {
-                return next(
-                    new restifyErrors.BadRequestError(
-                        'Padding must be less than width / 2'
-                    )
-                )
+                return next(new Error('Padding must be less than width / 2'))
             }
             if (Math.abs(padding) >= height / 2) {
-                return next(
-                    new restifyErrors.BadRequestError(
-                        'Padding must be less than height / 2'
-                    )
-                )
+                return next(new Error('Padding must be less than height / 2'))
             }
         }
     }
@@ -172,7 +152,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
     if (bearing !== null) {
         if (bearing < 0 || bearing > 360) {
             return next(
-                new restifyErrors.BadRequestError(
+                new Error(
                     `Bearing is outside supported range (0-360): ${bearing}`
                 )
             )
@@ -182,18 +162,14 @@ const renderImage = (params, response, next, tilePath, logger) => {
     if (pitch !== null) {
         if (pitch < 0 || pitch > 60) {
             return next(
-                new restifyErrors.BadRequestError(
-                    `Pitch is outside supported range (0-60): ${pitch}`
-                )
+                new Error(`Pitch is outside supported range (0-60): ${pitch}`)
             )
         }
     }
 
     if (!((center && zoom !== null) || bounds)) {
         return next(
-            new restifyErrors.BadRequestError(
-                'Either center and zoom OR bounds must be provided'
-            )
+            new Error('Either center and zoom OR bounds must be provided')
         )
     }
 
@@ -201,63 +177,43 @@ const renderImage = (params, response, next, tilePath, logger) => {
         if (typeof images === 'string') {
             images = JSON.parse(images)
         } else if (typeof images !== 'object') {
-            return next(
-                new restifyErrors.BadRequestError(
-                    'images must be an object or a string'
-                )
-            )
+            return next(new Error('images must be an object or a string'))
         }
 
-        // validate URLs
         for (const image of Object.values(images)) {
             if (!(image && image.url)) {
                 return next(
-                    new restifyErrors.BadRequestError(
+                    new Error(
                         'Invalid image object; a url is required for each image'
                     )
                 )
             }
             try {
-                // use new URL to validate URL
-                /* eslint-disable-next-line no-unused-vars */
                 const url = new URL(image.url)
             } catch (e) {
-                return next(
-                    new restifyErrors.BadRequestError(
-                        `Invalid image URL: ${image.url}`
-                    )
-                )
+                return next(new Error(`Invalid image URL: ${image.url}`))
             }
         }
     }
 
     if (imports !== null) {
         if (typeof imports !== 'object' && !Array.isArray(imports)) {
-            return next(
-                new restifyErrors.BadRequestError('imports must be an array')
-            )
+            return next(new Error('imports must be an array'))
         }
 
         for (const imp of imports) {
             if (!(imp && imp.url && imp.id)) {
                 return next(
-                    new restifyErrors.BadRequestError(
+                    new Error(
                         'Invalid import object; a url and a id is required for each import'
                     )
                 )
             }
             if (!imp.url.startsWith('mapbox://styles'))
                 try {
-                    // use new URL to validate URL
-
-                    /* eslint-disable-next-line no-unused-vars */
                     const url = new URL(imp.url)
                 } catch (e) {
-                    return next(
-                        new restifyErrors.BadRequestError(
-                            `Invalid import URL: ${imp.url}`
-                        )
-                    )
+                    return next(new Error(`Invalid import URL: ${imp.url}`))
                 }
         }
     }
@@ -276,43 +232,16 @@ const renderImage = (params, response, next, tilePath, logger) => {
             images,
             imports,
         })
-            .then((data, rejected) => {
-                if (rejected) {
-                    return next(
-                        new restifyErrors.InternalServerError(
-                            { cause: rejected },
-                            `Error processing render request: ${rejected}`
-                        )
-                    )
-                }
-                return response.sendRaw(200, data, {
-                    'content-type': 'image/png',
-                })
+            .then((data) => {
+                response.contentType('image/png')
+                response.send(data)
             })
             .catch((err) => {
-                if (err instanceof restifyErrors.InternalServerError) {
-                    return next(err)
-                }
-
-                return next(
-                    new restifyErrors.InternalServerError(
-                        `Error processing render request: ${err}`
-                    )
-                )
+                next(new Error(`Error processing render request: ${err}`))
             })
     } catch (err) {
-        if (err instanceof restifyErrors.InternalServerError) {
-            return next(err)
-        }
-
-        return next(
-            new restifyErrors.InternalServerError(
-                `Error processing render request: ${err}`
-            )
-        )
+        next(new Error(`Error processing render request: ${err}`))
     }
-
-    return null
 }
 
 // Provide the CLI
@@ -337,22 +266,11 @@ program
 
 const { port = 8000, tiles: tilePath = null, verbose = false } = program.opts()
 
-export const server = restify.createServer({
-    name: 'mbgl-renderer',
-    version: '1.0.0',
-    ignoreTrailingSlash: true,
-})
-server.use(restify.plugins.queryParser())
-server.use(restify.plugins.bodyParser())
-server.use(
-    restifyValidation.validationPlugin({
-        errorsAsArray: false,
-        forbidUndefinedVariables: false,
-        errorHandler: restifyErrors.BadRequestError,
-    })
-)
+const app = express()
+app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 
-server.use(
+app.use(
     pino({
         enabled: verbose,
         autoLogging: {
@@ -373,60 +291,66 @@ server.use(
     })
 )
 
+const validateParams = Object.entries(PARAMS).flatMap(([param, rules]) => {
+    const validators = []
+    if (rules.isString) validators.push((value) => typeof value === 'string')
+    if (rules.isInt) validators.push((value) => Number.isInteger(Number(value)))
+    if (rules.isFloat) validators.push((value) => !isNaN(parseFloat(value)))
+    if (rules.isObject) validators.push((value) => typeof value === 'object')
+    if (rules.isArray) validators.push((value) => Array.isArray(value))
+
+    return rules.in.map((location) =>
+        (location === 'body' ? body : query)(param)
+            .if((value) => value !== undefined)
+            .custom((value) => validators.every((v) => v(value)))
+            .withMessage(`Invalid ${param}`)
+    )
+})
+
 /**
  * /render (GET): renders an image based on request query parameters.
  */
-server.get(
-    {
-        url: '/render',
-        validation: {
-            queries: PARAMS,
-        },
-    },
-    (req, res, next) => renderImage(req.query, res, next, tilePath, req.log)
-)
+app.get('/render', validateParams, (req, res, next) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() })
+    }
+    renderImage(req.query, res, next, tilePath, req.log)
+})
 
 /**
  * /render (POST): renders an image based on request body.
  */
-server.post(
-    {
-        url: '/render',
-        validation: {
-            content: PARAMS,
-        },
-    },
-    (req, res, next) => renderImage(req.body, res, next, tilePath, req.log)
-)
+app.post('/render', validateParams, (req, res, next) => {
+    const errors = validationResult(req)
+    if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() })
+    }
+    renderImage(req.body, res, next, tilePath, req.log)
+})
 
 /**
  * List all available endpoints.
  */
-server.get({ url: '/' }, (req, res, next) => {
-    const routes = {}
-    Object.values(server.router.getRoutes()).forEach(
-        ({ spec: { url, method } }) => {
-            if (!routes[url]) {
-                routes[url] = []
-            }
-            routes[url].push(method)
-        }
-    )
+app.get('/', (req, res) => {
+    const routes = app._router.stack
+        .filter((r) => r.route)
+        .map((r) => ({
+            path: r.route.path,
+            methods: Object.keys(r.route.methods),
+        }))
 
-    res.send({
+    res.json({
         routes,
         version,
     })
-
-    return next()
 })
 
 /**
  * /health: returns 200 to confirm that server is up
  */
-server.get({ url: '/health' }, (req, res, next) => {
-    res.send(200)
-    next()
+app.get('/health', (req, res) => {
+    res.sendStatus(200)
 })
 
 let tilePathMessage = ''
@@ -434,13 +358,13 @@ if (tilePath !== null) {
     tilePathMessage = `\n using local mbtiles in: ${tilePath}`
 }
 
-server.listen(port, () => {
+app.listen(port, () => {
     console.log(
         '\n-----------------------------------------------------------------\n',
-        `mbgl-renderer server started and listening at ${server.url}`,
+        `mbgl-renderer server started and listening on port ${port}`,
         tilePathMessage,
         '\n-----------------------------------------------------------------\n'
     )
 })
 
-export default { server }
+export default { app }

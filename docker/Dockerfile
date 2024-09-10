@@ -78,7 +78,6 @@ RUN dpkgArch="$(dpkg --print-architecture)" && \
 
 
 COPY package*.json /app/
-#RUN npm ci
 
 COPY .babelrc /app/.babelrc
 COPY src/ /app/src/
