@@ -24,7 +24,7 @@ const PARAMS = {
     imports: { in: ['body', 'query'], isArray: true, optional: true },
 }
 
-const renderImage = (params, response, next, tilePath, logger) => {
+const renderImage = async (params, tilePath) => {
     const {
         width,
         height,
@@ -47,7 +47,7 @@ const renderImage = (params, response, next, tilePath, logger) => {
         try {
             style = JSON.parse(style)
         } catch (jsonErr) {
-            return next(new Error('Error parsing JSON style'))
+            throw new Error('Error parsing JSON style')
         }
     }
 
@@ -57,46 +57,36 @@ const renderImage = (params, response, next, tilePath, logger) => {
         }
 
         if (center.length !== 2) {
-            return next(
-                new Error(
-                    `Center must be longitude,latitude. Invalid value found: ${[
-                        ...center,
-                    ]}`
-                )
+            throw new Error(
+                `Center must be longitude,latitude. Invalid value found: ${[
+                    ...center,
+                ]}`
             )
         }
 
         if (!Number.isFinite(center[0]) || Math.abs(center[0]) > 180) {
-            return next(
-                new Error(
-                    `Center longitude is outside world bounds (-180 to 180 deg): ${center[0]}`
-                )
+            throw new Error(
+                `Center longitude is outside world bounds (-180 to 180 deg): ${center[0]}`
             )
         }
 
         if (!Number.isFinite(center[1]) || Math.abs(center[1]) > 90) {
-            return next(
-                new Error(
-                    `Center latitude is outside world bounds (-90 to 90 deg): ${center[1]}`
-                )
+            throw new Error(
+                `Center latitude is outside world bounds (-90 to 90 deg): ${center[1]}`
             )
         }
     }
     if (zoom !== null) {
         zoom = parseFloat(zoom)
         if (zoom < 0 || zoom > 22) {
-            return next(
-                new Error(
-                    `Zoom level is outside supported range (0-22): ${zoom}`
-                )
+            throw new Error(
+                `Zoom level is outside supported range (0-22): ${zoom}`
             )
         }
     }
     if (ratio !== null) {
         if (!ratio || ratio < 1) {
-            return next(
-                new Error(`Ratio is outside supported range (>=1): ${ratio}`)
-            )
+            throw new Error(`Ratio is outside supported range (>=1): ${ratio}`)
         }
     }
     if (bounds !== null) {
@@ -105,142 +95,125 @@ const renderImage = (params, response, next, tilePath, logger) => {
         }
 
         if (bounds.length !== 4) {
-            return next(
-                new Error(
-                    `Bounds must be west,south,east,north. Invalid value found: ${[
-                        ...bounds,
-                    ]}`
-                )
+            throw new Error(
+                `Bounds must be west,south,east,north. Invalid value found: ${[
+                    ...bounds,
+                ]}`
             )
         }
         for (const b of bounds) {
             if (!Number.isFinite(b)) {
-                return next(
-                    new Error(
-                        `Bounds must be west,south,east,north. Invalid value found: ${[
-                            ...bounds,
-                        ]}`
-                    )
+                throw new Error(
+                    `Bounds must be west,south,east,north. Invalid value found: ${[
+                        ...bounds,
+                    ]}`
                 )
             }
         }
 
         const [west, south, east, north] = bounds
         if (west === east) {
-            return next(
-                new Error(`Bounds west and east coordinate are the same value`)
+            throw new Error(
+                `Bounds west and east coordinate are the same value`
             )
         }
         if (south === north) {
-            return next(
-                new Error(
-                    `Bounds south and north coordinate are the same value`
-                )
+            throw new Error(
+                `Bounds south and north coordinate are the same value`
             )
         }
 
         if (padding) {
             if (Math.abs(padding) >= width / 2) {
-                return next(new Error('Padding must be less than width / 2'))
+                throw new Error('Padding must be less than width / 2')
             }
             if (Math.abs(padding) >= height / 2) {
-                return next(new Error('Padding must be less than height / 2'))
+                throw new Error('Padding must be less than height / 2')
             }
         }
     }
 
     if (bearing !== null) {
         if (bearing < 0 || bearing > 360) {
-            return next(
-                new Error(
-                    `Bearing is outside supported range (0-360): ${bearing}`
-                )
+            throw new Error(
+                `Bearing is outside supported range (0-360): ${bearing}`
             )
         }
     }
 
     if (pitch !== null) {
         if (pitch < 0 || pitch > 60) {
-            return next(
-                new Error(`Pitch is outside supported range (0-60): ${pitch}`)
-            )
+            throw new Error(`Pitch is outside supported range (0-60): ${pitch}`)
         }
     }
 
     if (!((center && zoom !== null) || bounds)) {
-        return next(
-            new Error('Either center and zoom OR bounds must be provided')
-        )
+        throw new Error('Either center and zoom OR bounds must be provided')
     }
 
     if (images !== null) {
         if (typeof images === 'string') {
             images = JSON.parse(images)
         } else if (typeof images !== 'object') {
-            return next(new Error('images must be an object or a string'))
+            throw new Error('images must be an object or a string')
         }
 
         for (const image of Object.values(images)) {
             if (!(image && image.url)) {
-                return next(
-                    new Error(
-                        'Invalid image object; a url is required for each image'
-                    )
+                throw new Error(
+                    'Invalid image object; a url is required for each image'
                 )
             }
             try {
                 const url = new URL(image.url)
             } catch (e) {
-                return next(new Error(`Invalid image URL: ${image.url}`))
+                throw new Error(`Invalid image URL: ${image.url}`)
             }
         }
     }
 
     if (imports !== null) {
         if (typeof imports !== 'object' && !Array.isArray(imports)) {
-            return next(new Error('imports must be an array'))
+            throw new Error('imports must be an array')
         }
 
         for (const imp of imports) {
             if (!(imp && imp.url && imp.id)) {
-                return next(
-                    new Error(
-                        'Invalid import object; a url and a id is required for each import'
-                    )
+                throw new Error(
+                    'Invalid import object; a url and a id is required for each import'
                 )
             }
             if (!imp.url.startsWith('mapbox://styles'))
                 try {
                     const url = new URL(imp.url)
                 } catch (e) {
-                    return next(new Error(`Invalid import URL: ${imp.url}`))
+                    throw new Error(`Invalid import URL: ${imp.url}`)
                 }
         }
     }
 
     try {
-        render(style, parseInt(width, 10), parseInt(height, 10), {
-            zoom,
-            center,
-            bounds,
-            padding,
-            tilePath,
-            ratio,
-            bearing,
-            pitch,
-            token,
-            images,
-            imports,
-        })
-            .then((data) => {
-                response.contentType('image/png')
-                response.send(data)
-            })
-            .catch((err) => {
-                next(new Error(`Error processing render request: ${err}`))
-            })
+        const data = await render(
+            style,
+            parseInt(width, 10),
+            parseInt(height, 10),
+            {
+                zoom,
+                center,
+                bounds,
+                padding,
+                tilePath,
+                ratio,
+                bearing,
+                pitch,
+                token,
+                images,
+                imports,
+            }
+        )
+        return data
     } catch (err) {
-        next(new Error(`Error processing render request: ${err}`))
+        throw new Error(`Error processing render request: ${err}`)
     }
 }
 
@@ -310,41 +283,62 @@ const validateParams = Object.entries(PARAMS).flatMap(([param, rules]) => {
 /**
  * /render (GET): renders an image based on request query parameters.
  */
-app.get('/render', validateParams, (req, res, next) => {
+app.get('/render', validateParams, async (req, res, next) => {
     const errors = validationResult(req)
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() })
     }
-    renderImage(req.query, res, next, tilePath, req.log)
+
+    try {
+        const data = await renderImage(req.query, tilePath)
+        res.writeHead(200, {
+            'Content-Type': 'image/png',
+            'Content-Length': data.length,
+        })
+        res.end(data)
+    } catch (err) {
+        next(err)
+    }
 })
 
 /**
  * /render (POST): renders an image based on request body.
  */
-app.post('/render', validateParams, (req, res, next) => {
+app.post('/render', validateParams, async (req, res, next) => {
     const errors = validationResult(req)
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() })
     }
-    renderImage(req.body, res, next, tilePath, req.log)
+
+    try {
+        const data = await renderImage(req.body, tilePath)
+        res.writeHead(201, {
+            'Content-Type': 'image/png',
+            'Content-Length': data.length,
+        })
+        res.end(data)
+    } catch (err) {
+        next(err)
+    }
 })
 
 /**
  * List all available endpoints.
  */
-app.get('/', (req, res) => {
-    const routes = app._router.stack
-        .filter((r) => r.route)
-        .map((r) => ({
-            path: r.route.path,
-            methods: Object.keys(r.route.methods),
-        }))
+// app.get('/', (req, res) => {
+//     const routes = app._router.stack
+//         .filter((r) => r.route)
+//         .map((r) => ({
+//             path: r.route.path,
+//             methods: Object.keys(r.route.methods),
+//         }))
 
-    res.json({
-        routes,
-        version,
-    })
-})
+//     res.json({
+//         routes,
+//         version,
+//     })
+//     res.sendStatus(200)
+// })
 
 /**
  * /health: returns 200 to confirm that server is up
