@@ -1,15 +1,13 @@
 /* eslint-disable no-new */
-import fs from 'fs'
 import path from 'path'
 // sharp must be before zlib and other imports or sharp gets wrong version of zlib and breaks on some servers
 import sharp from 'sharp'
-import zlib from 'zlib'
 import geoViewport from '@mapbox/geo-viewport'
-import maplibre from '@maplibre/maplibre-gl-native'
-import MBTiles from '@mapbox/mbtiles'
+import maplibre, {
+    type ResourceKind,
+    type RequestResponse,
+} from '@maplibre/maplibre-gl-native'
 import pino from 'pino'
-import webRequest from 'request'
-import urlLib from 'url'
 
 const TILE_REGEXP = RegExp('mbtiles://([^/]+)/(\\d+)/(\\d+)/(\\d+)')
 const MBTILES_REGEXP = /mbtiles:\/\/(\S+?)(?=[/"]+)/gi
@@ -24,6 +22,7 @@ const logger = pino({
     },
 })
 
+// @ts-ignore
 maplibre.on('message', (msg) => {
     switch (msg.severity) {
         case 'ERROR': {
@@ -48,74 +47,22 @@ maplibre.on('message', (msg) => {
     }
 })
 
-export const isMapboxURL = (url) => url.startsWith('mapbox://')
-export const isMapboxStyleURL = (url) => url.startsWith('mapbox://styles/')
-const isMBTilesURL = (url) => url.startsWith('mbtiles://')
-
-// normalize functions derived from: https://github.com/mapbox/mapbox-gl-js/blob/master/src/util/mapbox.js
-
-/**
- * Normalize a Mapbox source URL to a full URL
- * @param {string} url - url to mapbox source in style json, e.g. "url": "mapbox://mapbox.mapbox-streets-v7"
- * @param {string} token - mapbox public token
- */
-const normalizeMapboxSourceURL = (url, token) => {
-    try {
-        const urlObject = urlLib.parse(url)
-        urlObject.query = urlObject.query || {}
-        urlObject.pathname = `/v4/${url.split('mapbox://')[1]}.json`
-        urlObject.protocol = 'https'
-        urlObject.host = 'api.mapbox.com'
-        urlObject.query.secure = true
-        urlObject.query.access_token = token
-        return urlLib.format(urlObject)
-    } catch (e) {
-        const msg = `Could not normalize Mapbox source URL: ${url}\n${e}`
-        logger.error(msg)
-        throw new Error(msg)
-    }
-}
-
-/**
- * Normalize a Mapbox tile URL to a full URL
- * @param {string} url - url to mapbox tile in style json or resolved from source
- * e.g. mapbox://tiles/mapbox.mapbox-streets-v7/1/0/1.vector.pbf
- * @param {string} token - mapbox public token
- */
-const normalizeMapboxTileURL = (url, token) => {
-    try {
-        const urlObject = urlLib.parse(url)
-        urlObject.query = urlObject.query || {}
-        urlObject.pathname = `/v4${urlObject.path}`
-        urlObject.protocol = 'https'
-        urlObject.host = 'a.tiles.mapbox.com'
-        urlObject.query.access_token = token
-        return urlLib.format(urlObject)
-    } catch (e) {
-        const msg = `Could not normalize Mapbox tile URL: ${url}\n${e}`
-        logger.error(msg)
-        throw new Error(msg)
-    }
-}
+export const isMapboxURL = (url: string) => url.startsWith('mapbox://')
+export const isMapboxStyleURL = (url: string) =>
+    url.startsWith('mapbox://styles/')
 
 /**
  * Normalize a Mapbox style URL to a full URL
  * @param {string} url - url to mapbox source in style json, e.g. "url": "mapbox://styles/mapbox/streets-v12"
  * @param {string} token - mapbox public token
  */
-export const normalizeMapboxStyleURL = (url, token) => {
+export const normalizeMapboxStyleURL = (url: string, token: string) => {
     try {
-        const urlObject = urlLib.parse(url)
-        urlObject.query = {
-            access_token: token,
-            secure: true,
-        }
-        urlObject.pathname = `styles/v1/${url.split('mapbox://styles/')[1]}`
-        urlObject.protocol = 'https'
-        urlObject.host = 'api.mapbox.com'
-        urlObject.query.secure = true
-        urlObject.query.access_token = token
-        return urlLib.format(urlObject)
+        const origin = new URL(url)
+        const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
+        urlObject.searchParams.set('access_token', token)
+        urlObject.searchParams.set('secure', 'true')
+        return urlObject.toString()
     } catch (e) {
         const msg = `Could not normalize Mapbox style URL: ${url}\n${e}`
         logger.error(msg)
@@ -130,24 +77,22 @@ export const normalizeMapboxStyleURL = (url, token) => {
  *
  * Returns {string} - url, e.g., "https://api.mapbox.com/styles/v1/mapbox/streets-v9/sprite.png?access_token=<token>"
  */
-export const normalizeMapboxSpriteURL = (url, token) => {
+export const normalizeMapboxSpriteURL = (url: string, token: string) => {
     try {
+        const origin = new URL(url)
+        const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
+
         const extMatch = /(\.png|\.json)$/g.exec(url)
         const ratioMatch = /(@\d+x)\./g.exec(url)
-        const trimIndex = Math.min(
-            ratioMatch != null ? ratioMatch.index : Infinity,
-            extMatch.index
-        )
-        const urlObject = urlLib.parse(url.substring(0, trimIndex))
 
-        const extPart = extMatch[1]
-        const ratioPart = ratioMatch != null ? ratioMatch[1] : ''
-        urlObject.query = urlObject.query || {}
-        urlObject.query.access_token = token
-        urlObject.pathname = `/styles/v1${urlObject.path}/sprite${ratioPart}${extPart}`
-        urlObject.protocol = 'https'
-        urlObject.host = 'api.mapbox.com'
-        return urlLib.format(urlObject)
+        if (extMatch) {
+            const extPart = extMatch[1]
+            const ratioPart = ratioMatch ? ratioMatch[1] : ''
+            urlObject.pathname = `/styles/v1${urlObject.pathname}/sprite${ratioPart}${extPart}`
+        }
+
+        urlObject.searchParams.set('access_token', token)
+        return urlObject.toString()
     } catch (e) {
         const msg = `Could not normalize Mapbox sprite URL: ${url}\n${e}`
         logger.error(msg)
@@ -162,126 +107,17 @@ export const normalizeMapboxSpriteURL = (url, token) => {
  *
  * Returns {string} - url, e.g., "https://api.mapbox.com/styles/v1/mapbox/streets-v9/sprite.png?access_token=<token>"
  */
-export const normalizeMapboxGlyphURL = (url, token) => {
+export const normalizeMapboxGlyphURL = (url: string, token: string) => {
     try {
-        const urlObject = urlLib.parse(url)
-        urlObject.query = urlObject.query || {}
-        urlObject.query.access_token = token
-        urlObject.pathname = `/fonts/v1${urlObject.path}`
-        urlObject.protocol = 'https'
-        urlObject.host = 'api.mapbox.com'
-        return urlLib.format(urlObject)
+        const origin = new URL(url)
+        const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
+        urlObject.searchParams.set('access_token', token)
+        return urlObject.toString()
     } catch (e) {
         const msg = `Could not normalize Mapbox glyph URL: ${url}\n${e}`
         logger.error(msg)
         throw new Error(msg)
     }
-}
-
-/**
- * Very simplistic function that splits out mbtiles service name from the URL
- *
- * @param {String} url - URL to resolve
- */
-const resolveNamefromURL = (url) => url.split('://')[1].split('/')[0]
-
-/**
- * Resolve a URL of a local mbtiles file to a file path
- * Expected to follow this format "mbtiles://<service_name>/*"
- *
- * @param {String} tilePath - path containing mbtiles files
- * @param {String} url - url of a data source in style.json file.
- */
-const resolveMBTilesURL = (tilePath, url) =>
-    path.format({
-        dir: tilePath,
-        name: resolveNamefromURL(url),
-        ext: '.mbtiles',
-    })
-
-/**
- * Given a URL to a local mbtiles file, get the TileJSON for that to load correct tiles.
- *
- * @param {String} tilePath - path containing mbtiles files.
- * @param {String} url - url of a data source in style.json file.
- * @param {function} callback - function to call with (err, {data}).
- */
-const getLocalTileJSON = (tilePath, url, callback) => {
-    const mbtilesFilename = resolveMBTilesURL(tilePath, url)
-    const service = resolveNamefromURL(url)
-
-    new MBTiles(mbtilesFilename, (err, mbtiles) => {
-        if (err) {
-            callback(err)
-            return null
-        }
-
-        mbtiles.getInfo((infoErr, info) => {
-            if (infoErr) {
-                callback(infoErr)
-                return null
-            }
-
-            const { minzoom, maxzoom, center, bounds, format } = info
-
-            const ext = format === 'pbf' ? '.pbf' : ''
-
-            const tileJSON = {
-                tilejson: '1.0.0',
-                tiles: [`mbtiles://${service}/{z}/{x}/{y}${ext}`],
-                minzoom,
-                maxzoom,
-                center,
-                bounds,
-            }
-
-            callback(null, { data: Buffer.from(JSON.stringify(tileJSON)) })
-            return null
-        })
-
-        return null
-    })
-}
-
-/**
- * Fetch a tile from a local mbtiles file.
- *
- * @param {String} tilePath - path containing mbtiles files.
- * @param {String} url - url of a data source in style.json file.
- * @param {function} callback - function to call with (err, {data}).
- */
-const getLocalTile = (tilePath, url, callback) => {
-    const matches = url.match(TILE_REGEXP)
-    const [z, x, y] = matches.slice(matches.length - 3, matches.length)
-    const isVector = path.extname(url) === '.pbf'
-    const mbtilesFile = resolveMBTilesURL(tilePath, url)
-
-    new MBTiles(mbtilesFile, (err, mbtiles) => {
-        if (err) {
-            callback(err)
-            return null
-        }
-
-        mbtiles.getTile(z, x, y, (tileErr, data) => {
-            if (tileErr) {
-                callback(null, {})
-                return null
-            }
-
-            if (isVector) {
-                // if the tile is compressed, unzip it (for vector tiles only!)
-                zlib.unzip(data, (unzipErr, unzippedData) => {
-                    callback(unzipErr, { data: unzippedData })
-                })
-            } else {
-                callback(null, { data })
-            }
-
-            return null
-        })
-
-        return null
-    })
 }
 
 /**
@@ -292,56 +128,62 @@ const getLocalTile = (tilePath, url, callback) => {
  * @param {String} url - URL of the tile
  * @param {function} callback - callback to call with (err, {data})
  */
-const getRemoteTile = (url, callback) => {
-    webRequest(
-        {
-            url,
-            encoding: null,
-            gzip: true,
+const getRemoteTile = async (
+    url: string,
+    callback: (err: Error | null, data?: RequestResponse | null) => unknown
+) => {
+    console.log('Started', url)
+    console.time(url)
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            Origin: 'http://localhost:3000',
+            'Accept-Encoding': 'gzip, deflate, br',
+            Connection: 'close',
         },
-        (err, res, data) => {
-            if (err) {
-                return callback(err)
+        signal: AbortSignal.timeout(15000),
+    })
+        .then(async (res) => {
+            if (res.status === 204) {
+                return null
             }
 
-            switch (res.statusCode) {
-                case 200: {
-                    var response = {
-                        data: data,
-                    }
-
-                    if (res.headers.modified) {
-                        response.modified = new Date(res.headers.modified)
-                    }
-                    if (res.headers.expires) {
-                        response.expires = new Date(res.headers.expires)
-                    }
-                    if (res.headers.etag) {
-                        response.etag = res.headers.etag
-                    }
-
-                    return callback(null, response)
-                }
-                case 204: {
-                    // No data for this url
-                    return callback(null, {})
-                }
-                case 404: {
-                    // Tile not found
-                    // this may be valid for some tilesets that have partial coverage
-                    // on servers that do not return blank tiles in these areas.
-                    logger.warn(`Missing tile at: ${url}`)
-                    return callback(null, {})
-                }
-                default: {
-                    // assume error
-                    const msg = `request for remote tile failed: ${url} (status: ${res.statusCode})`
-                    logger.error(msg)
-                    return callback(new Error(msg))
-                }
+            if (res.status === 404) {
+                logger.warn(`Missing tile at: ${url}`)
+                return null
             }
-        }
-    )
+
+            if (!res.ok) {
+                const msg = `request for remote tile failed: ${url} (status: ${res.status})`
+                logger.error(msg)
+                throw new Error(msg)
+            }
+
+            const response: RequestResponse = {
+                data: new Uint8Array(await res.arrayBuffer()),
+                etag: res.headers.get('etag') || undefined,
+            }
+
+            console.log(res.headers.get('CF-Cache-Status'))
+
+            if (res.headers.get('last-modified')) {
+                response.modified = new Date(
+                    res.headers.get('last-modified') || ''
+                )
+            }
+
+            if (res.headers.get('expires')) {
+                response.expires = new Date(res.headers.get('expires') || '')
+            }
+
+            console.timeEnd(url)
+            return response
+        })
+        .then((res) => callback(null, res))
+        .catch((error) => {
+            console.timeEnd(url)
+            callback(error)
+        })
 }
 
 /**
@@ -352,44 +194,46 @@ const getRemoteTile = (url, callback) => {
  * @param {String} url - URL of the asset
  * @param {function} callback - callback to call with (err, {data})
  */
-const getRemoteAsset = (url, callback) => {
-    webRequest(
-        {
-            url,
-            encoding: null,
-            gzip: true,
+const getRemoteAsset = (
+    url: string,
+    callback: (err: Error | null, data?: RequestResponse) => unknown
+) => {
+    fetch(url, {
+        method: 'GET',
+        headers: {
+            'Accept-Encoding': 'gzip, deflate, br',
         },
-        (err, res, data) => {
-            if (err) {
-                return callback(err)
+    })
+        .then(async (res) => {
+            if (!res.ok) {
+                const msg = `Request for remote asset failed: ${url} (Status: ${res.status})`
+                logger.error(msg)
+                throw new Error(msg)
             }
 
-            switch (res.statusCode) {
-                case 200: {
-                    var response = {
-                        data: data,
-                    }
-
-                    if (res.headers.modified) {
-                        response.modified = new Date(res.headers.modified)
-                    }
-                    if (res.headers.expires) {
-                        response.expires = new Date(res.headers.expires)
-                    }
-                    if (res.headers.etag) {
-                        response.etag = res.headers.etag
-                    }
-
-                    return callback(null, response)
-                }
-                default: {
-                    const msg = `request for remote asset failed: ${res.request.uri.href} (status: ${res.statusCode})`
-                    logger.error(msg)
-                    return callback(new Error(msg))
-                }
+            const response: RequestResponse = {
+                data: new Uint8Array(await res.arrayBuffer()),
             }
-        }
-    )
+
+            const modified = res.headers.get('last-modified')
+            if (modified) {
+                response.modified = new Date(modified)
+            }
+
+            const expires = res.headers.get('expires')
+            if (expires) {
+                response.expires = new Date(expires)
+            }
+
+            const etag = res.headers.get('etag')
+            if (etag) {
+                response.etag = etag
+            }
+
+            return response
+        })
+        .then((response) => callback(null, response))
+        .catch((err) => callback(err))
 }
 
 /**
@@ -399,8 +243,8 @@ const getRemoteAsset = (url, callback) => {
  * @param {String} url - URL of the asset
  * returns a Promise
  */
-const getRemoteAssetPromise = (url) => {
-    return new Promise((resolve, reject) => {
+const getRemoteAssetPromise = (url: string) => {
+    return new Promise<RequestResponse | undefined>((resolve, reject) => {
         getRemoteAsset(url, (err, data) => {
             if (err) {
                 return reject(err)
@@ -417,30 +261,22 @@ const getRemoteAssetPromise = (url) => {
  * @param {String} url - URL of the asset
  * returns a Promise
  */
-const getRemoteJSON = (url) => {
-    return new Promise((resolve, reject) => {
-        webRequest(
-            {
-                url,
-            },
-            (err, res, data) => {
-                if (err) {
-                    return callback(err)
-                }
-
-                switch (res.statusCode) {
-                    case 200: {
-                        return resolve(data)
-                    }
-                    default: {
-                        const msg = `request for remote asset failed: ${res.request.uri.href} (status: ${res.statusCode})`
-                        logger.error(msg)
-                        return reject(new Error(msg))
-                    }
-                }
+const getRemoteJSON = (url: string) => {
+    return fetch(url)
+        .then((response) => {
+            if (!response.ok) {
+                const msg = `Anfrage für Remote-Asset fehlgeschlagen: ${response.url} (Status: ${response.status})`
+                logger.error(msg)
+                throw new Error(msg)
             }
-        )
-    })
+            return response.json()
+        })
+        .then((data) => {
+            return data
+        })
+        .catch((error) => {
+            throw error
+        })
 }
 
 /**
@@ -449,23 +285,28 @@ const getRemoteJSON = (url) => {
  * @param {String} url - URL of the asset
  * @param {String} token - Mapbox access token (optional)
  */
-const getRemoteStyleImport = async (url, token) => {
+const getRemoteStyleImport = async (url: string, token: string) => {
     const importStyleUrl = isMapboxStyleURL(url)
         ? normalizeMapboxStyleURL(url, token)
         : url
     if (!importStyleUrl) throw new Error('Invalid import style URL')
 
     try {
-        const importedStyle = JSON.parse(await getRemoteJSON(importStyleUrl))
+        const importedStyle = await getRemoteJSON(importStyleUrl)
         if (!importedStyle)
             throw new Error(`Could not fetch import style: ${importStyleUrl}`)
-        if (typeof importedStyle !== 'object' || importedStyle.version !== 8)
+        if (
+            typeof importedStyle !== 'object' ||
+            importedStyle === null ||
+            !('version' in importedStyle) ||
+            importedStyle.version !== 8
+        )
             throw new Error(
                 `Invalid import style: ${importedStyle} (Version Required: 8)`
             )
 
         return importedStyle
-    } catch (e) {
+    } catch (e: any) {
         logger.error(e.message)
         throw new Error(
             `Could not fetch import style from ${importStyleUrl} - ${e.toString()}`
@@ -479,7 +320,10 @@ const getRemoteStyleImport = async (url, token) => {
  * @param {String} - path to tilesets (optional)
  * @param {String} - Mapbox GL token (optional; required for any Mapbox hosted resources)
  */
-const requestHandler = ({ url, kind }, callback) => {
+const requestHandler = (
+    { url, kind }: { url: string; kind: ResourceKind },
+    callback: (err: Error | null, data?: RequestResponse | null) => unknown
+) => {
     if (isMapboxURL(url)) {
         const msg = 'mapbox access token is required'
         logger.error(msg)
@@ -502,22 +346,23 @@ const requestHandler = ({ url, kind }, callback) => {
             }
             case 4: {
                 // glyph
-                getRemoteAsset(urlLib.parse(url), callback)
+                getRemoteAsset(url, callback)
                 break
             }
             case 5: {
                 // sprite image
-                getRemoteAsset(urlLib.parse(url), callback)
+                getRemoteAsset(url, callback)
                 break
             }
             case 6: {
                 // sprite json
-                getRemoteAsset(urlLib.parse(url), callback)
+                getRemoteAsset(url, callback)
                 break
             }
+            // @ts-expect-error - ResourceKind.ImageSource is not typed
             case 7: {
                 // image source
-                getRemoteAsset(urlLib.parse(url), callback)
+                getRemoteAsset(url, callback)
                 break
             }
             default: {
@@ -530,7 +375,7 @@ const requestHandler = ({ url, kind }, callback) => {
     } catch (err) {
         const msg = `Error while making resource request to: ${url}\n${err}`
         logger.error(msg)
-        return callback(msg)
+        return callback(new Error(msg))
     }
 }
 
@@ -541,7 +386,15 @@ const requestHandler = ({ url, kind }, callback) => {
  * @param {String} id - id of image to add
  * @param {Object} options - options object with {url, pixelRatio, sdf}.  url is required
  */
-const loadImage = async (map, id, { url, pixelRatio = 1, sdf = false }) => {
+const loadImage = async (
+    map: any,
+    id: string,
+    {
+        url,
+        pixelRatio = 1,
+        sdf = false,
+    }: { url: string; pixelRatio?: number; sdf?: boolean }
+) => {
     if (!url) {
         const msg = `Invalid url for image: ${id}`
         logger.error(msg)
@@ -549,12 +402,17 @@ const loadImage = async (map, id, { url, pixelRatio = 1, sdf = false }) => {
     }
 
     try {
-        let imgBuffer = null
+        let imgBuffer: Buffer
         if (url.startsWith('data:')) {
             imgBuffer = Buffer.from(url.split('base64,')[1], 'base64')
         } else {
             const img = await getRemoteAssetPromise(url)
-            imgBuffer = img.data
+            if (!img?.data) {
+                const msg = `Could not load image: ${id}`
+                logger.error(msg)
+                throw new Error(msg)
+            }
+            imgBuffer = Buffer.from(img.data)
         }
         const img = sharp(imgBuffer)
         const metadata = await img.metadata()
@@ -577,11 +435,13 @@ const loadImage = async (map, id, { url, pixelRatio = 1, sdf = false }) => {
  * @param {Object} map - Mapbox GL map object
  * @param {Object} images - object with {id: {url, ...other image properties}}
  */
-const loadImages = async (map, images) => {
+const loadImages = async (map: any, images: any) => {
     if (images !== null) {
-        const imageRequests = Object.entries(images).map(async (image) => {
-            await loadImage(map, ...image)
-        })
+        const imageRequests = Object.entries(images).map(
+            async ([id, image]) => {
+                await loadImage(map, id, image as { url: string })
+            }
+        )
 
         // await for all requests to complete
         await Promise.all(imageRequests)
@@ -595,9 +455,9 @@ const loadImages = async (map, images) => {
  * @param {Object} options - Mapbox GL map options
  * @returns
  */
-const renderMap = (map, options) => {
+const renderMap = (map: any, options: any) => {
     return new Promise((resolve, reject) => {
-        map.render(options, (err, buffer) => {
+        map.render(options, (err: any, buffer: any) => {
             if (err) return reject(err)
 
             return resolve(buffer)
@@ -613,7 +473,7 @@ const renderMap = (map, options) => {
  * @param {Number} ratio - image pixel ratio
  * @returns
  */
-const toPNG = async (buffer, width, height, ratio) => {
+const toPNG = async (buffer: any, width: any, height: any, ratio: any) => {
     // Un-premultiply pixel values
     // Mapbox GL buffer contains premultiplied values, which are not handled correctly by sharp
     // https://github.com/mapbox/mapbox-gl-native/issues/9124
@@ -660,7 +520,12 @@ const toPNG = async (buffer, width, height, ratio) => {
  * @param {String} tilePath - path to directory containing local mbtiles files that are
  * referenced from the style.json as "mbtiles://<tileset>"
  */
-export const render = async (style, width = 1024, height = 1024, options) => {
+export const render = async (
+    style: any,
+    width = 1024,
+    height = 1024,
+    options: any
+) => {
     const {
         bounds = null,
         bearing = 0,
@@ -762,7 +627,7 @@ export const render = async (style, width = 1024, height = 1024, options) => {
     const correctedStyle = style
     if (imports !== null && imports.length > 0) {
         const importedStyles = await Promise.all(
-            imports.map(async (e) => ({
+            imports.map(async (e: { id: string; url: string }) => ({
                 id: e.id,
                 url: e.url,
                 style: await getRemoteStyleImport(e.url, token),
@@ -780,7 +645,7 @@ export const render = async (style, width = 1024, height = 1024, options) => {
             })
 
             // Add layers from imported styles (before layers from local styles)
-            const importedLayers = importedStyle.layers.map((layer) => ({
+            const importedLayers = importedStyle.layers.map((layer: any) => ({
                 ...layer,
                 source: !layer.source
                     ? undefined
@@ -823,9 +688,7 @@ export const render = async (style, width = 1024, height = 1024, options) => {
     }
 
     const map = new maplibre.Map({
-        request: requestHandler,
         ratio,
-        cacheSize: 100000000,
     })
 
     map.load(correctedStyle)

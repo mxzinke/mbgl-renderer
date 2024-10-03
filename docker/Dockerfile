@@ -1,4 +1,4 @@
-FROM node:20-bullseye AS builder
+FROM node:20.16.0-bullseye AS builder
 
 WORKDIR /app/
 
@@ -6,15 +6,11 @@ COPY package*.json ./
 
 RUN npm install
 
-COPY .babelrc /app/.babelrc
+COPY tsconfig.json /app/tsconfig.json
 COPY src/ /app/src/
 
 RUN npm run build && \
-  npm prune --include prod && \
-  rm -rf "/root/.npm" && \
-  rm -rf "/root/.cache" && \
-  rm -rf "/app/src" && \
-  rm -rf "/app/.babelrc"
+  npm prune --include prod
 
 FROM ubuntu:22.04
 

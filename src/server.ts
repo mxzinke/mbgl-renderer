@@ -1,14 +1,13 @@
-#!/usr/bin/env node
-import fs from 'fs'
+#!/usr/bin/env node+
 import express from 'express'
 import { body, query, validationResult } from 'express-validator'
-import { program, InvalidOptionArgumentError } from 'commander'
+import { program } from 'commander'
 import pino from 'pino-http'
 
-import { version } from '../package.json'
-import { render } from './render'
+import packageJson from '../package.json' assert { type: 'json' }
+import { render } from './render.js'
 
-const parseListToFloat = (text) => text.split(',').map(Number)
+const parseListToFloat = (text: string) => text.split(',').map(Number)
 
 const PARAMS = {
     style: { in: ['body', 'query'], isObject: true },
@@ -24,7 +23,7 @@ const PARAMS = {
     imports: { in: ['body', 'query'], isArray: true, optional: true },
 }
 
-const renderImage = async (params, tilePath) => {
+const renderImage = async (params: any, tilePath: string) => {
     const {
         width,
         height,
@@ -159,13 +158,15 @@ const renderImage = async (params, tilePath) => {
         }
 
         for (const image of Object.values(images)) {
-            if (!(image && image.url)) {
+            if (
+                !(typeof image === 'object' && image !== null && 'url' in image)
+            ) {
                 throw new Error(
                     'Invalid image object; a url is required for each image'
                 )
             }
             try {
-                const url = new URL(image.url)
+                const url = new URL(image.url as string)
             } catch (e) {
                 throw new Error(`Invalid image URL: ${image.url}`)
             }
@@ -219,21 +220,9 @@ const renderImage = async (params, tilePath) => {
 
 // Provide the CLI
 program
-    .version(version)
+    .version(packageJson.version)
     .description('Start a server to render Mapbox GL map requests to images.')
     .option('-p, --port <n>', 'Server port', parseInt)
-    .option(
-        '-t, --tiles <mbtiles_path>',
-        'Directory containing local mbtiles files to render',
-        (tilePath) => {
-            if (!fs.existsSync(tilePath)) {
-                throw new InvalidOptionArgumentError(
-                    `Path to mbtiles files does not exist: ${tilePath}`
-                )
-            }
-            return tilePath
-        }
-    )
     .option('-v, --verbose', 'Enable request logging')
     .parse(process.argv)
 
@@ -265,12 +254,21 @@ app.use(
 )
 
 const validateParams = Object.entries(PARAMS).flatMap(([param, rules]) => {
-    const validators = []
-    if (rules.isString) validators.push((value) => typeof value === 'string')
-    if (rules.isInt) validators.push((value) => Number.isInteger(Number(value)))
-    if (rules.isFloat) validators.push((value) => !isNaN(parseFloat(value)))
-    if (rules.isObject) validators.push((value) => typeof value === 'object')
-    if (rules.isArray) validators.push((value) => Array.isArray(value))
+    const validators: ((value: any) => boolean)[] = []
+    if ('isString' in rules && rules.isString)
+        validators.push((value) => typeof value === 'string')
+    if ('isInt' in rules && rules.isInt)
+        validators.push((value) => Number.isInteger(Number(value)))
+    if ('isFloat' in rules && rules.isFloat)
+        validators.push((value) => !isNaN(parseFloat(value)))
+    if ('isObject' in rules && rules.isObject)
+        validators.push(
+            (value) =>
+                (typeof value === 'object' && value !== null) ||
+                (typeof value === 'string' && value.startsWith('{'))
+        )
+    if ('isArray' in rules && rules.isArray)
+        validators.push((value) => Array.isArray(value))
 
     return rules.in.map((location) =>
         (location === 'body' ? body : query)(param)
@@ -283,7 +281,7 @@ const validateParams = Object.entries(PARAMS).flatMap(([param, rules]) => {
 /**
  * /render (GET): renders an image based on request query parameters.
  */
-app.get('/render', validateParams, async (req, res, next) => {
+app.get('/render', validateParams, async (req: any, res: any, next: any) => {
     const errors = validationResult(req)
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() })
@@ -304,7 +302,7 @@ app.get('/render', validateParams, async (req, res, next) => {
 /**
  * /render (POST): renders an image based on request body.
  */
-app.post('/render', validateParams, async (req, res, next) => {
+app.post('/render', validateParams, async (req: any, res: any, next: any) => {
     const errors = validationResult(req)
     if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() })
@@ -343,7 +341,7 @@ app.post('/render', validateParams, async (req, res, next) => {
 /**
  * /health: returns 200 to confirm that server is up
  */
-app.get('/health', (req, res) => {
+app.get('/health', (req: any, res: any) => {
     res.sendStatus(200)
 })
 
@@ -360,5 +358,3 @@ app.listen(port, () => {
         '\n-----------------------------------------------------------------\n'
     )
 })
-
-export default { app }

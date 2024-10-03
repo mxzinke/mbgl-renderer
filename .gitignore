@@ -7,3 +7,7 @@ coverage/*
 node_modules/*
 
 tiles/*
+
+dist/*
+
+.DS_Store
