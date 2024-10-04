@@ -3,13 +3,9 @@ import path from 'path'
 // sharp must be before zlib and other imports or sharp gets wrong version of zlib and breaks on some servers
 import sharp from 'sharp'
 import geoViewport from '@mapbox/geo-viewport'
-import maplibre, {
-    type ResourceKind,
-    type RequestResponse,
-} from '@maplibre/maplibre-gl-native'
+import maplibre, { type Map } from '@maplibre/maplibre-gl-native'
 import pino from 'pino'
 
-const TILE_REGEXP = RegExp('mbtiles://([^/]+)/(\\d+)/(\\d+)/(\\d+)')
 const MBTILES_REGEXP = /mbtiles:\/\/(\S+?)(?=[/"]+)/gi
 
 const logger = pino({
@@ -56,7 +52,7 @@ export const isMapboxStyleURL = (url: string) =>
  * @param {string} url - url to mapbox source in style json, e.g. "url": "mapbox://styles/mapbox/streets-v12"
  * @param {string} token - mapbox public token
  */
-export const normalizeMapboxStyleURL = (url: string, token: string) => {
+const normalizeMapboxStyleURL = (url: string, token: string) => {
     try {
         const origin = new URL(url)
         const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
@@ -68,215 +64,6 @@ export const normalizeMapboxStyleURL = (url: string, token: string) => {
         logger.error(msg)
         throw new Error(msg)
     }
-}
-
-/**
- * Normalize a Mapbox sprite URL to a full URL
- * @param {string} url - url to mapbox sprite, e.g. "url": "mapbox://sprites/mapbox/streets-v9.png"
- * @param {string} token - mapbox public token
- *
- * Returns {string} - url, e.g., "https://api.mapbox.com/styles/v1/mapbox/streets-v9/sprite.png?access_token=<token>"
- */
-export const normalizeMapboxSpriteURL = (url: string, token: string) => {
-    try {
-        const origin = new URL(url)
-        const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
-
-        const extMatch = /(\.png|\.json)$/g.exec(url)
-        const ratioMatch = /(@\d+x)\./g.exec(url)
-
-        if (extMatch) {
-            const extPart = extMatch[1]
-            const ratioPart = ratioMatch ? ratioMatch[1] : ''
-            urlObject.pathname = `/styles/v1${urlObject.pathname}/sprite${ratioPart}${extPart}`
-        }
-
-        urlObject.searchParams.set('access_token', token)
-        return urlObject.toString()
-    } catch (e) {
-        const msg = `Could not normalize Mapbox sprite URL: ${url}\n${e}`
-        logger.error(msg)
-        throw new Error(msg)
-    }
-}
-
-/**
- * Normalize a Mapbox glyph URL to a full URL
- * @param {string} url - url to mapbox sprite, e.g. "url": "mapbox://sprites/mapbox/streets-v9.png"
- * @param {string} token - mapbox public token
- *
- * Returns {string} - url, e.g., "https://api.mapbox.com/styles/v1/mapbox/streets-v9/sprite.png?access_token=<token>"
- */
-export const normalizeMapboxGlyphURL = (url: string, token: string) => {
-    try {
-        const origin = new URL(url)
-        const urlObject = new URL(`https://api.mapbox.com${origin.pathname}`)
-        urlObject.searchParams.set('access_token', token)
-        return urlObject.toString()
-    } catch (e) {
-        const msg = `Could not normalize Mapbox glyph URL: ${url}\n${e}`
-        logger.error(msg)
-        throw new Error(msg)
-    }
-}
-
-/**
- * Fetch a remotely hosted tile.
- * Empty or missing tiles return null data to the callback function, which
- * result in those tiles not rendering but no errors being raised.
- *
- * @param {String} url - URL of the tile
- * @param {function} callback - callback to call with (err, {data})
- */
-const getRemoteTile = async (
-    url: string,
-    callback: (err: Error | null, data?: RequestResponse | null) => unknown
-) => {
-    console.log('Started', url)
-    console.time(url)
-    fetch(url, {
-        method: 'GET',
-        headers: {
-            Origin: 'http://localhost:3000',
-            'Accept-Encoding': 'gzip, deflate, br',
-            Connection: 'close',
-        },
-        signal: AbortSignal.timeout(15000),
-    })
-        .then(async (res) => {
-            if (res.status === 204) {
-                return null
-            }
-
-            if (res.status === 404) {
-                logger.warn(`Missing tile at: ${url}`)
-                return null
-            }
-
-            if (!res.ok) {
-                const msg = `request for remote tile failed: ${url} (status: ${res.status})`
-                logger.error(msg)
-                throw new Error(msg)
-            }
-
-            const response: RequestResponse = {
-                data: new Uint8Array(await res.arrayBuffer()),
-                etag: res.headers.get('etag') || undefined,
-            }
-
-            console.log(res.headers.get('CF-Cache-Status'))
-
-            if (res.headers.get('last-modified')) {
-                response.modified = new Date(
-                    res.headers.get('last-modified') || ''
-                )
-            }
-
-            if (res.headers.get('expires')) {
-                response.expires = new Date(res.headers.get('expires') || '')
-            }
-
-            console.timeEnd(url)
-            return response
-        })
-        .then((res) => callback(null, res))
-        .catch((error) => {
-            console.timeEnd(url)
-            callback(error)
-        })
-}
-
-/**
- * Fetch a remotely hosted asset: glyph, sprite, etc
- * Anything other than a HTTP 200 response results in an exception.
- *
- *
- * @param {String} url - URL of the asset
- * @param {function} callback - callback to call with (err, {data})
- */
-const getRemoteAsset = (
-    url: string,
-    callback: (err: Error | null, data?: RequestResponse) => unknown
-) => {
-    fetch(url, {
-        method: 'GET',
-        headers: {
-            'Accept-Encoding': 'gzip, deflate, br',
-        },
-    })
-        .then(async (res) => {
-            if (!res.ok) {
-                const msg = `Request for remote asset failed: ${url} (Status: ${res.status})`
-                logger.error(msg)
-                throw new Error(msg)
-            }
-
-            const response: RequestResponse = {
-                data: new Uint8Array(await res.arrayBuffer()),
-            }
-
-            const modified = res.headers.get('last-modified')
-            if (modified) {
-                response.modified = new Date(modified)
-            }
-
-            const expires = res.headers.get('expires')
-            if (expires) {
-                response.expires = new Date(expires)
-            }
-
-            const etag = res.headers.get('etag')
-            if (etag) {
-                response.etag = etag
-            }
-
-            return response
-        })
-        .then((response) => callback(null, response))
-        .catch((err) => callback(err))
-}
-
-/**
- * Fetch a remotely hosted asset: glyph, sprite, etc
- * Anything other than a HTTP 200 response results in an exception.
- *
- * @param {String} url - URL of the asset
- * returns a Promise
- */
-const getRemoteAssetPromise = (url: string) => {
-    return new Promise<RequestResponse | undefined>((resolve, reject) => {
-        getRemoteAsset(url, (err, data) => {
-            if (err) {
-                return reject(err)
-            }
-            return resolve(data)
-        })
-    })
-}
-
-/**
- * Fetch a remotely hosted json file
- * Anything other than a HTTP 200 response results in an exception.
- *
- * @param {String} url - URL of the asset
- * returns a Promise
- */
-const getRemoteJSON = (url: string) => {
-    return fetch(url)
-        .then((response) => {
-            if (!response.ok) {
-                const msg = `Anfrage für Remote-Asset fehlgeschlagen: ${response.url} (Status: ${response.status})`
-                logger.error(msg)
-                throw new Error(msg)
-            }
-            return response.json()
-        })
-        .then((data) => {
-            return data
-        })
-        .catch((error) => {
-            throw error
-        })
 }
 
 /**
@@ -292,7 +79,15 @@ const getRemoteStyleImport = async (url: string, token: string) => {
     if (!importStyleUrl) throw new Error('Invalid import style URL')
 
     try {
-        const importedStyle = await getRemoteJSON(importStyleUrl)
+        const importedStyle = await fetch(importStyleUrl).then((res) => {
+            if (!res.ok) {
+                const msg = `Anfrage für Remote-Asset fehlgeschlagen: ${res.url} (Status: ${res.status})`
+                logger.error(msg)
+                throw new Error(msg)
+            }
+
+            return res.json()
+        })
         if (!importedStyle)
             throw new Error(`Could not fetch import style: ${importStyleUrl}`)
         if (
@@ -311,71 +106,6 @@ const getRemoteStyleImport = async (url: string, token: string) => {
         throw new Error(
             `Could not fetch import style from ${importStyleUrl} - ${e.toString()}`
         )
-    }
-}
-
-/**
- * requestHandler constructs a request handler for the map to load resources.
- *
- * @param {String} - path to tilesets (optional)
- * @param {String} - Mapbox GL token (optional; required for any Mapbox hosted resources)
- */
-const requestHandler = (
-    { url, kind }: { url: string; kind: ResourceKind },
-    callback: (err: Error | null, data?: RequestResponse | null) => unknown
-) => {
-    if (isMapboxURL(url)) {
-        const msg = 'mapbox access token is required'
-        logger.error(msg)
-        return callback(new Error('Mapbox not supported!'))
-    }
-
-    try {
-        switch (kind) {
-            case 2: {
-                // source
-                getRemoteAsset(url, callback)
-
-                break
-            }
-            case 3: {
-                // tile
-                getRemoteTile(url, callback)
-
-                break
-            }
-            case 4: {
-                // glyph
-                getRemoteAsset(url, callback)
-                break
-            }
-            case 5: {
-                // sprite image
-                getRemoteAsset(url, callback)
-                break
-            }
-            case 6: {
-                // sprite json
-                getRemoteAsset(url, callback)
-                break
-            }
-            // @ts-expect-error - ResourceKind.ImageSource is not typed
-            case 7: {
-                // image source
-                getRemoteAsset(url, callback)
-                break
-            }
-            default: {
-                // NOT HANDLED!
-                const msg = `error Request kind not handled: ${kind}`
-                logger.error(msg)
-                throw new Error(msg)
-            }
-        }
-    } catch (err) {
-        const msg = `Error while making resource request to: ${url}\n${err}`
-        logger.error(msg)
-        return callback(new Error(msg))
     }
 }
 
@@ -406,13 +136,12 @@ const loadImage = async (
         if (url.startsWith('data:')) {
             imgBuffer = Buffer.from(url.split('base64,')[1], 'base64')
         } else {
-            const img = await getRemoteAssetPromise(url)
-            if (!img?.data) {
-                const msg = `Could not load image: ${id}`
-                logger.error(msg)
-                throw new Error(msg)
-            }
-            imgBuffer = Buffer.from(img.data)
+            imgBuffer = await fetch(url)
+                .then((res) => res.arrayBuffer())
+                .then((img) => {
+                    if (!img) throw new Error(`Could not load image: ${id}`)
+                    return Buffer.from(img)
+                })
         }
         const img = sharp(imgBuffer)
         const metadata = await img.metadata()
@@ -455,54 +184,14 @@ const loadImages = async (map: any, images: any) => {
  * @param {Object} options - Mapbox GL map options
  * @returns
  */
-const renderMap = (map: any, options: any) => {
-    return new Promise((resolve, reject) => {
-        map.render(options, (err: any, buffer: any) => {
-            if (err) return reject(err)
+const renderMap = (map: Map, options: any) => {
+    return new Promise<Uint8Array>((resolve, reject) => {
+        map.render(options, (error, buffer) => {
+            if (error) return reject(error)
 
             return resolve(buffer)
         })
     })
-}
-
-/**
- * Convert premultiplied image buffer from Mapbox GL to RGBA PNG format.
- * @param {Uint8Array} buffer - image data buffer
- * @param {Number} width - image width
- * @param {Number} height - image height
- * @param {Number} ratio - image pixel ratio
- * @returns
- */
-const toPNG = async (buffer: any, width: any, height: any, ratio: any) => {
-    // Un-premultiply pixel values
-    // Mapbox GL buffer contains premultiplied values, which are not handled correctly by sharp
-    // https://github.com/mapbox/mapbox-gl-native/issues/9124
-    // since we are dealing with 8-bit RGBA values, normalize alpha onto 0-255 scale and divide
-    // it out of RGB values
-
-    for (let i = 0; i < buffer.length; i += 4) {
-        const alpha = buffer[i + 3]
-        const norm = alpha / 255
-        if (alpha === 0) {
-            buffer[i] = 0
-            buffer[i + 1] = 0
-            buffer[i + 2] = 0
-        } else {
-            buffer[i] /= norm
-            buffer[i + 1] = buffer[i + 1] / norm
-            buffer[i + 2] = buffer[i + 2] / norm
-        }
-    }
-
-    return sharp(buffer, {
-        raw: {
-            width: Math.round(width * ratio),
-            height: Math.round(height * ratio),
-            channels: 4,
-        },
-    })
-        .png()
-        .toBuffer()
 }
 
 /**
@@ -709,7 +398,15 @@ export const render = async (
     logger.info('map rendered')
     map.release()
 
-    return toPNG(buffer, width, height, ratio)
+    return sharp(buffer, {
+        raw: {
+            width: Math.round(width * ratio),
+            height: Math.round(height * ratio),
+            channels: 4,
+        },
+    })
+        .png({ compressionLevel: 2, quality: 100, adaptiveFiltering: false })
+        .toBuffer()
 }
 
 export default render
